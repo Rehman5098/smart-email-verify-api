@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const dns = require('dns'); // Import the built-in DNS module
+const EmailValidator = require('email-deep-validator');
 
 const app = express();
 app.use(cors());
@@ -19,36 +19,34 @@ const apiKeyAuth = (req, res, next) => {
   next();
 };
 
-// --- A function to verify a single email ---
-const verifyEmail = (email) => {
-  return new Promise((resolve) => {
-    const emailStr = String(email).toLowerCase();
-    const domain = emailStr.split('@')[1] || '';
+// --- A function to verify a single email using SMTP ---
+const verifyEmail = async (email) => {
+  const emailValidator = new EmailValidator();
+  const domain = email.split('@')[1] || '';
 
-    // Step 1: A more strict syntax check
-    const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
-    if (!emailRegex.test(emailStr)) {
-      return resolve({ email: email, status: 'Invalid', domain: domain });
+  try {
+    // This performs all checks: syntax, domain, and a live SMTP check
+    const { wellFormed, validDomain, validMailbox } = await emailValidator.verify(email);
+
+    if (!wellFormed || !validDomain) {
+      return { email, status: 'Invalid', domain };
     }
 
-    // Step 2: Domain & MX Record Check
-    dns.resolveMx(domain, (err, addresses) => {
-      // If there's an error (like domain not found) or no MX records exist, it's invalid.
-      if (err || !addresses || addresses.length === 0) {
-        // We will treat these as 'Unverifiable' as the domain might be temporarily down
-        // or a catch-all server that we can't fully validate.
-        if (err && err.code === 'ENOTFOUND') {
-            return resolve({ email: email, status: 'Invalid', domain: domain });
-        }
-        return resolve({ email: email, status: 'Unverifiable', domain: domain });
-      }
-      
-      // If we find MX records, we can be confident the email address is valid.
-      return resolve({ email: email, status: 'Valid', domain: domain });
-    });
-  });
+    // validMailbox can be true, false, or null
+    if (validMailbox) {
+      return { email, status: 'Valid', domain };
+    } else if (validMailbox === false) {
+      // The server confirmed the mailbox does not exist
+      return { email, status: 'Invalid', domain };
+    } else {
+      // The server is a catch-all or did not respond clearly
+      return { email, status: 'Unverifiable', domain };
+    }
+  } catch (error) {
+    console.error(`Error verifying ${email}:`, error);
+    return { email, status: 'Unverifiable', domain };
+  }
 };
-
 
 // --- The Main Verification Route ---
 app.post('/verify', apiKeyAuth, async (req, res) => {
@@ -58,7 +56,6 @@ app.post('/verify', apiKeyAuth, async (req, res) => {
     return res.status(400).json({ message: 'Request body must be an array of emails.' });
   }
 
-  // Verify all emails at the same time for better performance
   const verificationPromises = emails.map(verifyEmail);
   const results = await Promise.all(verificationPromises);
 
