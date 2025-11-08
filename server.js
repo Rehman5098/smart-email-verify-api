@@ -1,48 +1,66 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const dns = require('dns'); // Import the built-in DNS module
 
 const app = express();
-app.use(cors()); // Allows your website to call the API
-app.use(express.json()); // Allows the API to read JSON from requests
+app.use(cors());
+app.use(express.json());
 
 const API_KEY = process.env.API_KEY;
 const PORT = process.env.PORT || 8080;
 
 // --- Middleware to check the API Key ---
 const apiKeyAuth = (req, res, next) => {
-  // We will check for a header called 'x-api-key'
   const providedApiKey = req.header('x-api-key');
   if (!providedApiKey || providedApiKey !== API_KEY) {
-    // If the key is missing or wrong, send an error
     return res.status(401).json({ message: 'Invalid API key' });
   }
-  // If the key is correct, continue to the next step
   next();
 };
 
+// --- A function to verify a single email ---
+const verifyEmail = (email) => {
+  return new Promise((resolve) => {
+    const emailStr = String(email).toLowerCase();
+    const domain = emailStr.split('@')[1] || '';
+
+    // Step 1: A more strict syntax check
+    const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
+    if (!emailRegex.test(emailStr)) {
+      return resolve({ email: email, status: 'Invalid', domain: domain });
+    }
+
+    // Step 2: Domain & MX Record Check
+    dns.resolveMx(domain, (err, addresses) => {
+      // If there's an error (like domain not found) or no MX records exist, it's invalid.
+      if (err || !addresses || addresses.length === 0) {
+        // We will treat these as 'Unverifiable' as the domain might be temporarily down
+        // or a catch-all server that we can't fully validate.
+        if (err && err.code === 'ENOTFOUND') {
+            return resolve({ email: email, status: 'Invalid', domain: domain });
+        }
+        return resolve({ email: email, status: 'Unverifiable', domain: domain });
+      }
+      
+      // If we find MX records, we can be confident the email address is valid.
+      return resolve({ email: email, status: 'Valid', domain: domain });
+    });
+  });
+};
+
+
 // --- The Main Verification Route ---
-// It will only run if the apiKeyAuth middleware passes
-app.post('/verify', apiKeyAuth, (req, res) => {
+app.post('/verify', apiKeyAuth, async (req, res) => {
   const { emails } = req.body;
 
   if (!emails || !Array.isArray(emails)) {
     return res.status(400).json({ message: 'Request body must be an array of emails.' });
   }
 
-  // A simple regex to check for valid email syntax.
-  // Note: Real-world email verification is more complex (checking MX records, etc.)
-  // but this is a great, reliable start.
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-  const results = emails.map(email => {
-    const isValid = emailRegex.test(String(email).toLowerCase());
-    return {
-      email: email,
-      status: isValid ? 'Valid' : 'Invalid',
-      domain: email.split('@')[1] || ''
-    };
-  });
+  // Verify all emails at the same time for better performance
+  const verificationPromises = emails.map(verifyEmail);
+  const results = await Promise.all(verificationPromises);
 
   res.json(results);
 });
