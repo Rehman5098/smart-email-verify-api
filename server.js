@@ -21,29 +21,43 @@ const apiKeyAuth = (req, res, next) => {
 
 // --- A function to verify a single email using SMTP ---
 const verifyEmail = async (email) => {
-  const emailValidator = new EmailValidator();
+  // We configure the validator to wait longer (15 seconds) for a response.
+  const emailValidator = new EmailValidator({
+    timeout: 15000, // Increased timeout to 15 seconds
+    verifyMailbox: true,
+  });
+
   const domain = email.split('@')[1] || '';
 
   try {
-    // This performs all checks: syntax, domain, and a live SMTP check
-    const { wellFormed, validDomain, validMailbox } = await emailValidator.verify(email);
-
-    if (!wellFormed || !validDomain) {
+    const result = await emailValidator.verify(email);
+    const { wellFormed, validDomain, validMailbox } = result;
+    
+    // Check 1: Is the email format correct?
+    if (!wellFormed) {
       return { email, status: 'Invalid', domain };
     }
 
-    // validMailbox can be true, false, or null
-    if (validMailbox) {
+    // Check 2: Does the domain exist and can it receive emails?
+    if (!validDomain) {
+      return { email, status: 'Invalid', domain };
+    }
+
+    // Check 3: Does the actual mailbox exist? (The SMTP check)
+    // validMailbox can be true, false, or null.
+    if (validMailbox === true) {
       return { email, status: 'Valid', domain };
     } else if (validMailbox === false) {
-      // The server confirmed the mailbox does not exist
+      // The server confirmed the mailbox does not exist.
       return { email, status: 'Invalid', domain };
     } else {
-      // The server is a catch-all or did not respond clearly
+      // The server is a "catch-all" or did not give a clear answer.
       return { email, status: 'Unverifiable', domain };
     }
+
   } catch (error) {
-    console.error(`Error verifying ${email}:`, error);
+    console.error(`Error verifying ${email}:`, error.message);
+    // If any error occurs (like a timeout), we mark it as unverifiable.
     return { email, status: 'Unverifiable', domain };
   }
 };
