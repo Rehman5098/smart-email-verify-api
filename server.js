@@ -1,43 +1,50 @@
-// server.js - Naya aur behtar code
+// server.js - FINAL version using a professional API
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch'); // node-fetch library istemal karenge
+const fetch = require('node-fetch');
 
 const app = express();
-app.use(cors()); // CORS ko enable karein takeh aapka tool isse baat kar sake
+app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
-const EXTERNAL_API_URL = 'https://isitarealemail.com/api/email/validate';
+// This will now use your new, reliable API key from Railway
+const ABSTRACT_API_KEY = process.env.ABSTRACT_API_KEY;
 
-// Helper function to verify a single email
 const verifySingleEmail = async (email) => {
   const domain = email.split('@')[1] || '';
-  try {
-    const response = await fetch(`${EXTERNAL_API_URL}?email=${encodeURIComponent(email)}`);
-    if (!response.ok) {
-      // Agar API se error aaye
+  if (!ABSTRACT_API_KEY) {
+      console.error("Abstract API key is missing from Railway variables!");
       return { email, status: 'Unverifiable', domain };
-    }
+  }
+
+  const url = `https://emailvalidation.abstractapi.com/v1/?api_key=${ABSTRACT_API_KEY}&email=${encodeURIComponent(email)}`;
+
+  try {
+    const response = await fetch(url);
     const data = await response.json();
-    const statusMap = {
-      valid: 'Valid',
-      invalid: 'Invalid',
-      unknown: 'Unverifiable',
-    };
-    return {
-      email,
-      status: statusMap[data.status] || 'Unverifiable',
-      domain,
-    };
+
+    const deliverability = data.deliverability;
+    let status;
+
+    if (deliverability === 'DELIVERABLE') {
+      status = 'Valid';
+    } else if (deliverability === 'UNDELIVERABLE') {
+      status = 'Invalid';
+    } else { // RISKY or UNKNOWN
+      status = 'Unverifiable';
+    }
+    
+    return { email, status, domain };
+
   } catch (error) {
     console.error(`Error verifying ${email}:`, error);
     return { email, status: 'Unverifiable', domain };
   }
 };
 
-// Hamara main verification endpoint
+// Main verification endpoint. No extra key check is needed.
 app.post('/verify', async (req, res) => {
   const { emails } = req.body;
 
@@ -46,7 +53,6 @@ app.post('/verify', async (req, res) => {
   }
 
   const results = [];
-  // Ek ek karke email check karein takeh API block na kare
   for (const email of emails) {
     const result = await verifySingleEmail(email);
     results.push(result);
